@@ -870,13 +870,6 @@ async function initApp() {
   };
   document.getElementById('signout-btn').onclick = doSignout;
   setSyncStatus('connecting');
-  // Test Firestore connection
-  fetch(`${FB.base}/inventory?key=${FB.apiKey}&pageSize=1`)
-    .then(r => {
-      if (r.ok) { setSyncStatus('synced'); showToast('✅ Connected to database','success'); }
-      else { r.text().then(t => { setSyncStatus('error'); showToast('⚠️ Database error: '+r.status+' — check Firestore rules','error'); console.error('Firestore test failed:',t); }); }
-    })
-    .catch(e => { setSyncStatus('error'); showToast('⚠️ No database connection: '+e.message,'error'); });
 }
 
 function buildNav() {
@@ -940,8 +933,8 @@ function startListeners() {
     STATE.inventory = {};
     docs.forEach(d => { STATE.inventory[d._id] = d; });
     updateInventoryBadge();
-    if (type === 'initial') setSyncStatus('synced');
-    else { setSyncStatus('synced'); showToast('📦 Inventory updated', 'info'); }
+    setSyncStatus('synced');
+    if (type === 'update') showToast('📦 Inventory updated', 'info');
     // Re-render if on inventory page
     if (document.getElementById('page-inventory').classList.contains('active')) {
       renderInventory();
@@ -1009,9 +1002,9 @@ function setSyncStatus(status) {
   STATE.syncStatus = status;
   const dot = document.getElementById('sync-dot');
   const label = document.getElementById('sync-label');
+  if (!dot || !label) return;
   dot.className = 'sync-dot';
   if (status === 'synced') {
-    dot.classList.add(''); // green by default
     label.textContent = 'Live';
   } else if (status === 'saving') {
     dot.classList.add('syncing');
@@ -2654,59 +2647,93 @@ async function importV1Backup() {
   reader.onload = async (e) => {
     try {
       const data = JSON.parse(e.target.result);
-      if (!data.inventory && !data.sales) { showToast('Invalid backup file.','error'); return; }
+      if (!data.inventory && !data.sales) { 
+        progress.innerHTML = '<div class="alert alert-danger">❌ Invalid backup file — no inventory or sales found.</div>';
+        return; 
+      }
 
-      const counts = {inventory:0, customers:0, suppliers:0, sales:0, purchases:0};
-      progress.innerHTML = `<div class="alert alert-info">⏳ Migrating ${(data.inventory||[]).length} inventory items, ${(data.customers||[]).length} customers, ${(data.suppliers||[]).length} suppliers...</div>`;
+      const inv = data.inventory || [];
+      const custs = data.customers || [];
+      const sups = data.suppliers || [];
+      const wh = data.warehouse || [];
+      progress.innerHTML = `<div class="alert alert-info">⏳ Found: ${inv.length} inventory, ${custs.length} customers, ${sups.length} suppliers. Starting...</div>`;
+
+      let invCount = 0, custCount = 0, supCount = 0, errCount = 0;
+
+      // Test one fsSave first to catch any Firestore issues early
+      try {
+        const testId = 'migration_test_'+Date.now();
+        await fsSave(COLS.INVENTORY, testId, {id:testId, name:'__test__', _test:true});
+        await fsDelete(COLS.INVENTORY, testId);
+      } catch(testErr) {
+        progress.innerHTML = `<div class="alert alert-danger">❌ Cannot write to Firestore: ${testErr.message}<br>Check Firestore rules are published.</div>`;
+        return;
+      }
 
       // Import inventory
-      for (const item of (data.inventory||[])) {
+      for (let i = 0; i < inv.length; i++) {
+        const item = inv[i];
+        if (!item || !item.name) continue;
         try {
-          const id = String(item.id||uid());
+          const id = String(item.id || uid());
           await fsSave(COLS.INVENTORY, id, {...item, id, _v1migrated:true});
           STATE.inventory[id] = {...item, id, _id:id};
-          counts.inventory++;
-        } catch(e) {}
+          invCount++;
+          if (invCount % 50 === 0) {
+            progress.innerHTML = `<div class="alert alert-info">⏳ Inventory: ${invCount}/${inv.length}... please wait</div>`;
+          }
+        } catch(e) { errCount++; console.warn('inv err:', e.message); }
       }
+
+      progress.innerHTML = `<div class="alert alert-info">⏳ Inventory done (${invCount}). Now importing customers...</div>`;
 
       // Import customers
-      for (const c of (data.customers||[])) {
+      for (const c of custs) {
+        if (!c || !c.name) continue;
         try {
-          const id = String(c.id||uid());
+          const id = String(c.id || uid());
           await fsSave(COLS.CUSTOMERS, id, {...c, id, _v1migrated:true});
           STATE.customers[id] = {...c, id, _id:id};
-          counts.customers++;
-        } catch(e) {}
+          custCount++;
+        } catch(e) { errCount++; }
       }
 
+      progress.innerHTML = `<div class="alert alert-info">⏳ Customers done (${custCount}). Now importing suppliers...</div>`;
+
       // Import suppliers
-      for (const s of (data.suppliers||[])) {
+      for (const s of sups) {
+        if (!s || !s.name) continue;
         try {
-          const id = String(s.id||uid());
+          const id = String(s.id || uid());
           await fsSave(COLS.SUPPLIERS, id, {...s, id, _v1migrated:true});
           STATE.suppliers[id] = {...s, id, _id:id};
-          counts.suppliers++;
-        } catch(e) {}
+          supCount++;
+        } catch(e) { errCount++; }
       }
 
       // Import warehouse
-      for (const w of (data.warehouse||[])) {
+      for (const w of wh) {
+        if (!w) continue;
         try {
-          const id = String(w.id||uid());
+          const id = String(w.id || uid());
           await fsSave('warehouse', id, {...w, id, _v1migrated:true});
           if (!STATE.warehouse) STATE.warehouse = {};
           STATE.warehouse[id] = {...w, id, _id:id};
-        } catch(e) {}
+        } catch(e) { errCount++; }
       }
+
+      updateInventoryBadge();
+      renderInventory();
 
       progress.innerHTML = `<div class="alert alert-success">
         ✅ <b>Migration complete!</b><br>
-        📦 Inventory: ${counts.inventory} items<br>
-        👥 Customers: ${counts.customers}<br>
-        🚛 Suppliers: ${counts.suppliers}<br>
-        <br><i>Note: Sales history stays in v1 for reference. New sales are recorded in v2.</i>
+        📦 Inventory: <b>${invCount}</b> items<br>
+        👥 Customers: <b>${custCount}</b><br>
+        🚛 Suppliers: <b>${supCount}</b><br>
+        ${errCount > 0 ? `⚠️ ${errCount} errors (some items may not have saved)<br>` : ''}
+        <br><small>Sales history stays in v1. New sales record in v2 going forward.</small>
       </div>`;
-      updateInventoryBadge();
+      showToast(`✅ Migration complete! ${invCount} items imported.`, 'success');
     } catch(err) {
       progress.innerHTML = `<div class="alert alert-danger">❌ Migration failed: ${err.message}</div>`;
     }
