@@ -316,6 +316,7 @@ select.form-input{cursor:pointer}
     <div class="header-right">
       <span class="sync-dot" id="sync-dot"></span>
       <span class="sync-label" id="sync-label">Connecting...</span>
+      <button onclick="refreshAllData()" title="Refresh all data" style="background:none;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--text3)">🔄 Refresh</button>
       <div class="header-user" id="user-menu">
         <div class="header-avatar" id="user-avatar">A</div>
         <div>
@@ -708,17 +709,24 @@ async function fsDelete(col, id) {
 const _pollTimers = {};
 const _lastUpdateTimes = {};
 
+// Collection sizes for smart polling
+const LARGE_COLS = ['v2_inventory', 'v2_sales', 'v2_purchases', 'v2_cashflow'];
+const POLL_INTERVAL_LARGE = 5 * 60 * 1000;  // 5 minutes for large collections
+const POLL_INTERVAL_SMALL = 60 * 1000;       // 1 minute for small collections
+
 function startLivePolling(col, onUpdate) {
   if (_pollTimers[col]) clearInterval(_pollTimers[col]);
-  // Initial load
+  // Initial load only — no aggressive polling
   fsList(col).then(docs => {
     docs.forEach(doc => {
       _lastUpdateTimes[col] = _lastUpdateTimes[col] || {};
       _lastUpdateTimes[col][doc._id] = doc._updatedAt || '';
     });
     onUpdate(docs, 'initial');
-  });
-  // Poll every 5 seconds for changes
+  }).catch(e => console.warn('Initial load failed:', col, e.message));
+
+  // Smart polling interval — large collections poll rarely to save quota
+  const interval = LARGE_COLS.includes(col) ? POLL_INTERVAL_LARGE : POLL_INTERVAL_SMALL;
   _pollTimers[col] = setInterval(async () => {
     try {
       const docs = await fsList(col);
@@ -731,19 +739,40 @@ function startLivePolling(col, onUpdate) {
           _lastUpdateTimes[col][doc._id] = doc._updatedAt;
         }
       });
-      if (changed.length > 0) {
-        onUpdate(docs, 'update');
-      }
+      if (changed.length > 0) onUpdate(docs, 'update');
     } catch(e) {
-      console.warn('Poll error:', col, e);
+      console.warn('Poll error:', col, e.message);
     }
-  }, 5000);
+  }, interval);
 }
 
 function stopLivePolling(col) {
   if (_pollTimers[col]) {
     clearInterval(_pollTimers[col]);
     delete _pollTimers[col];
+  }
+}
+
+async function refreshAllData() {
+  setSyncStatus('saving');
+  showToast('🔄 Refreshing data...', 'info');
+  try {
+    const colsToRefresh = [COLS.INVENTORY, COLS.SALES, COLS.CUSTOMERS, COLS.SUPPLIERS, 'v2_purchases', 'v2_cashflow', 'v2_warehouse'];
+    for (const col of colsToRefresh) {
+      const docs = await fsList(col);
+      const stateKey = col.replace('v2_','');
+      STATE[stateKey] = {};
+      docs.forEach(d => { STATE[stateKey][d._id] = d; });
+    }
+    setSyncStatus('synced');
+    showToast('✅ Data refreshed!', 'success');
+    // Re-render current page
+    const activePage = document.querySelector('.page.active')?.id?.replace('page-','');
+    if (activePage) switchPage(activePage);
+    updateInventoryBadge();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Refresh failed: ' + e.message, 'error');
   }
 }
 
