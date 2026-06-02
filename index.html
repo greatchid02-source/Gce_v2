@@ -355,6 +355,7 @@ select.form-input{cursor:pointer}
           <div class="page-sub" id="inv-subtitle">Loading...</div>
         </div>
         <div style="display:flex;gap:8px">
+          <button class="btn" onclick="refreshAllData()" title="Reload all data from Firestore">🔄 Refresh</button>
           <button class="btn btn-primary" id="inv-add-btn" onclick="showAddItemModal()">+ Add Item</button>
         </div>
       </div>
@@ -717,14 +718,27 @@ const POLL_INTERVAL_SMALL = 60 * 1000;       // 1 minute for small collections
 
 function startLivePolling(col, onUpdate) {
   if (_pollTimers[col]) clearInterval(_pollTimers[col]);
-  // Initial load only — no aggressive polling
-  fsList(col).then(docs => {
-    docs.forEach(doc => {
-      _lastUpdateTimes[col] = _lastUpdateTimes[col] || {};
-      _lastUpdateTimes[col][doc._id] = doc._updatedAt || '';
-    });
-    onUpdate(docs, 'initial');
-  }).catch(e => console.warn('Initial load failed:', col, e.message));
+
+  // Initial load with retry
+  async function doInitialLoad(attempt) {
+    try {
+      const docs = await fsList(col);
+      docs.forEach(doc => {
+        _lastUpdateTimes[col] = _lastUpdateTimes[col] || {};
+        _lastUpdateTimes[col][doc._id] = doc._updatedAt || '';
+      });
+      onUpdate(docs, 'initial');
+    } catch(e) {
+      console.warn(`Initial load failed for ${col} (attempt ${attempt}):`, e.message);
+      if (attempt < 3) {
+        setTimeout(() => doInitialLoad(attempt + 1), 3000 * attempt);
+      } else {
+        console.error(`Giving up on ${col} after 3 attempts`);
+        onUpdate([], 'initial'); // show empty rather than hang
+      }
+    }
+  }
+  doInitialLoad(1);
 
   // Smart polling interval — large collections poll rarely to save quota
   const interval = LARGE_COLS.includes(col) ? POLL_INTERVAL_LARGE : POLL_INTERVAL_SMALL;
