@@ -407,17 +407,16 @@ select.form-input{cursor:pointer}
           <button class="btn btn-primary" onclick="showNewInvoiceModal()">+ New Invoice</button>
         </div>
       </div>
-      <div id="sales-content">
-        <div class="empty-state"><div class="empty-state-icon">🧾</div><div class="empty-state-title">Sales coming soon</div><div class="empty-state-sub">Week 2 build</div></div>
-      </div>
+      <div id="sales-content"></div>
     </div>
 
     <!-- ── PURCHASES ── -->
     <div class="page" id="page-purchases">
       <div class="page-header">
         <div><div class="page-title">Purchases</div><div class="page-sub">Stock purchases & supplier deliveries</div></div>
+        <button class="btn btn-primary" onclick="showNewPurchaseModal()">+ New Purchase</button>
       </div>
-      <div class="empty-state"><div class="empty-state-icon">🛒</div><div class="empty-state-title">Purchases coming soon</div><div class="empty-state-sub">Week 2 build</div></div>
+      <div id="purchases-content"></div>
     </div>
 
     <!-- ── CUSTOMERS ── -->
@@ -426,17 +425,16 @@ select.form-input{cursor:pointer}
         <div><div class="page-title">Customers</div></div>
         <button class="btn btn-primary" onclick="showAddCustomerModal()">+ Add Customer</button>
       </div>
-      <div id="customers-content">
-        <div class="empty-state"><div class="empty-state-icon">👥</div><div class="empty-state-title">Customers coming soon</div><div class="empty-state-sub">Week 2 build</div></div>
-      </div>
+      <div id="customers-content"></div>
     </div>
 
     <!-- ── SUPPLIERS ── -->
     <div class="page" id="page-suppliers">
       <div class="page-header">
         <div><div class="page-title">Suppliers</div></div>
+        <button class="btn btn-primary" onclick="showAddSupplierModal()">+ Add Supplier</button>
       </div>
-      <div class="empty-state"><div class="empty-state-icon">🚛</div><div class="empty-state-title">Suppliers coming soon</div><div class="empty-state-sub">Week 2 build</div></div>
+      <div id="suppliers-content"></div>
     </div>
 
     <!-- ── EXPENSES ── -->
@@ -1405,9 +1403,454 @@ async function applyStockAdj(id) {
   }
 }
 
-// Stubs for pages to be built in Week 2
-function showNewInvoiceModal() { showToast('Sales module — coming in Week 2', 'info'); }
-function showAddCustomerModal() { showToast('Customers module — coming in Week 2', 'info'); }
+// Stubs replaced by full Week 2 modules below
+
+// ════════════════════════════════════════════════════════════
+// WEEK 2 — SALES MODULE
+// ════════════════════════════════════════════════════════════
+
+let invoiceItems = [];
+let invoiceCustomer = null;
+let invoiceType = 'walkin';
+
+function renderSales() {
+  const el = document.getElementById('sales-content');
+  if (!el) return;
+  const today = new Date().toLocaleDateString();
+  const salesFilter = window._salesFilter || 'today';
+  const allSales = Object.values(STATE.sales||{});
+  const invGroups = {};
+  allSales.forEach(s => {
+    const k = s.invoiceNum || s.id;
+    if (!invGroups[k]) invGroups[k] = {invoiceNum:k,date:s.date,custName:s.custName||'Walk-in',custId:s.custId,items:[],total:0,profit:0,payment:s.payment,payMode:s.payMode,seller:s.seller};
+    invGroups[k].items.push(s);
+    invGroups[k].total += s.total||0;
+    invGroups[k].profit += s.profit||0;
+  });
+  const filtered = Object.values(invGroups).filter(g => salesFilter==='today'?g.date===today:true)
+    .sort((a,b)=>(b.invoiceNum||'').localeCompare(a.invoiceNum||''));
+  const totalRev = filtered.reduce((a,g)=>a+g.total,0);
+  const totalProfit = filtered.reduce((a,g)=>a+g.profit,0);
+  const margin = totalRev>0?Math.round(totalProfit/totalRev*100):0;
+  const nextInv = generateInvoiceNum();
+  const invFormRows = invoiceItems.map((l,i)=>`<tr>
+    <td>${esc(l.name)}</td><td class="td-center">${l.qty}</td>
+    <td class="td-right">${fmt(l.price)}</td><td class="td-right"><b>${fmt(l.price*l.qty)}</b></td>
+    <td><button class="btn btn-sm" onclick="removeInvItem(${i})" style="color:var(--danger);border-color:#fca5a5">✕</button></td>
+  </tr>`).join('');
+  const grandTotal = invoiceItems.reduce((a,l)=>a+l.price*l.qty,0);
+  const grandProfit = invoiceItems.reduce((a,l)=>a+(l.price-l.cost)*l.qty,0);
+  const ledgerRows = filtered.map(g=>{
+    const ptBadge = g.payment==='credit'?'<span class="badge badge-danger">Credit</span>':g.payment==='part'?'<span class="badge badge-warning">Part Pay</span>':'<span class="badge badge-success">Paid</span>';
+    const firstItem = (g.items[0]?.name||'')+(g.items.length>1?` +${g.items.length-1} more`:'');
+    return `<tr>
+      <td style="font-size:12px;color:var(--text3)">${g.date}</td>
+      <td><b style="font-family:var(--font-mono)">${esc(g.invoiceNum)}</b></td>
+      <td>${esc(g.custName)}</td><td>${ptBadge}</td>
+      <td style="font-size:12px;color:var(--text3)">${esc(firstItem)}</td>
+      <td class="td-right"><b>${fmt(g.total)}</b></td>
+      <td class="td-right" style="color:var(--success)">${fmt(g.profit)}</td>
+      <td style="font-size:11px;color:var(--text3)">${esc(g.seller||'')}</td>
+      <td><div style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="reprintSaleInvoice('${g.invoiceNum}')">🖨️</button>
+        <button class="btn btn-sm btn-danger" onclick="voidInvoice('${g.invoiceNum}')">🗑️</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
+      ${kpiCard('brand','💰','Revenue',fmt(totalRev),salesFilter==='today'?'Today':'All time')}
+      ${kpiCard('success','📈','Profit',fmt(totalProfit),margin+'% margin')}
+      ${kpiCard('warning','🧾','Invoices',filtered.length,salesFilter==='today'?'Today':'All time')}
+      ${kpiCard('danger','⏳','Outstanding',fmt(Object.values(STATE.customers||{}).reduce((a,c)=>a+(c.creditBalance||0),0)),'Credit customers')}
+    </div>
+    <div class="form-card">
+      <div class="form-title">🧾 New Invoice — #${nextInv}</div>
+      <div style="display:flex;gap:8px;margin-bottom:1rem">
+        <button class="btn ${invoiceType==='walkin'?'btn-primary':''}" onclick="setInvType('walkin')">Walk-in</button>
+        <button class="btn ${invoiceType==='registered'?'btn-primary':''}" onclick="setInvType('registered')">Registered Customer</button>
+      </div>
+      ${invoiceType==='registered'?`<div class="form-group" style="margin-bottom:1rem"><label>Select Customer</label>
+        <div style="position:relative">
+          <input class="form-input" id="inv-cust-search" placeholder="Search customer..." oninput="filterCustDd(this.value)" autocomplete="off">
+          <div id="inv-cust-dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);max-height:200px;overflow-y:auto;z-index:100"></div>
+        </div>
+        ${invoiceCustomer?`<div class="alert alert-success" style="margin-top:8px;padding:8px 12px">✅ <b>${esc(invoiceCustomer.name)}</b> — Owes: ${fmt(invoiceCustomer.creditBalance||0)}</div>`:''}
+      </div>`:`<div class="form-group" style="margin-bottom:1rem"><label>Print name (optional)</label>
+        <input class="form-input" id="inv-print-name" placeholder="e.g. Mr Johnson"></div>`}
+      <div class="form-grid c3" style="margin-bottom:12px;align-items:flex-end">
+        <div class="form-group"><label>Item</label>
+          <div style="position:relative">
+            <input class="form-input" id="inv-item-search" placeholder="Search items..." oninput="filterInvItemDd(this.value)" autocomplete="off">
+            <div id="inv-item-dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);max-height:220px;overflow-y:auto;z-index:100"></div>
+            <input type="hidden" id="inv-item-id">
+          </div>
+        </div>
+        <div class="form-group"><label>Qty</label><input class="form-input" id="inv-qty" type="number" min="1" value="1" style="text-align:center"></div>
+        <div class="form-group"><label>Price (₦)</label><input class="form-input" id="inv-price" type="number" min="0" value="0"></div>
+      </div>
+      <button class="btn btn-primary" onclick="addInvItem()" style="margin-bottom:1rem">+ Add Item</button>
+      ${invoiceItems.length?`
+        <div class="tbl-wrap" style="margin-bottom:1rem"><table>
+          <thead><tr><th>Item</th><th class="td-center">Qty</th><th class="td-right">Price</th><th class="td-right">Subtotal</th><th></th></tr></thead>
+          <tbody>${invFormRows}</tbody>
+          <tfoot><tr style="background:var(--surface);font-weight:700"><td colspan="3">Grand Total</td><td class="td-right">${fmt(grandTotal)}</td><td></td></tr></tfoot>
+        </table></div>
+        <div class="form-grid c3" style="margin-bottom:1rem">
+          <div class="form-group"><label>Payment Type</label>
+            <select class="form-input" id="inv-pay-type" onchange="onPayTypeChange()">
+              <option value="cash">Cash</option><option value="transfer">Transfer</option><option value="pos">POS</option>
+              ${invoiceType==='registered'?'<option value="credit">Credit</option><option value="part">Part Payment</option>':''}
+            </select>
+          </div>
+          <div class="form-group" id="inv-part-wrap" style="display:none"><label>Amount Paid (₦)</label><input class="form-input" id="inv-part-amt" type="number" min="0" placeholder="0"></div>
+          <div class="form-group"><label>Date (blank=today)</label><input class="form-input" id="inv-date" type="date"></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="saveSaleInvoice('print')">🖨️ Save & Print</button>
+          <button class="btn btn-success" onclick="saveSaleInvoice('save')">💾 Save</button>
+          <button class="btn" onclick="invoiceItems=[];invoiceCustomer=null;renderSales()">✕ Clear</button>
+        </div>
+        <div style="margin-top:6px;font-size:12px;color:var(--text3)">Profit: ${fmt(grandProfit)} (${grandTotal>0?Math.round(grandProfit/grandTotal*100):0}%)</div>
+      `:'<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">🧾</div><div>Add items above to build invoice</div></div>'}
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <div class="sec-title" style="margin:0">Sales Ledger</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm ${salesFilter==='today'?'btn-primary':''}" onclick="window._salesFilter='today';renderSales()">Today</button>
+        <button class="btn btn-sm ${salesFilter==='all'?'btn-primary':''}" onclick="window._salesFilter='all';renderSales()">All</button>
+      </div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th>Pay</th><th>Items</th><th class="td-right">Total</th><th class="td-right">Profit</th><th>Seller</th><th></th></tr></thead>
+      <tbody>${ledgerRows||'<tr><td colspan="9"><div class="empty-state"><div class="empty-state-icon">🧾</div><div>No sales yet</div></div></td></tr>'}</tbody>
+    </table></div>`;
+}
+
+function setInvType(t){invoiceType=t;if(t==='walkin')invoiceCustomer=null;renderSales();}
+function onPayTypeChange(){const t=document.getElementById('inv-pay-type')?.value;const w=document.getElementById('inv-part-wrap');if(w)w.style.display=t==='part'?'':'none';}
+
+function filterInvItemDd(val){
+  const dd=document.getElementById('inv-item-dd');if(!dd)return;
+  const term=val.toLowerCase().trim();if(!term){dd.style.display='none';return;}
+  const matches=Object.values(STATE.inventory).filter(i=>i.name?.toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term)).slice(0,20);
+  if(!matches.length){dd.style.display='none';return;}
+  dd.innerHTML=matches.map(i=>`<div data-id="${i._id}" data-name="${esc(i.name)}" data-price="${i.sell||0}" data-cost="${i.cost||0}"
+    style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px"
+    onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''" onmousedown="selectInvItem(this)">
+    <span><b>${esc(i.name)}</b> <span style="color:var(--text4);font-size:11px">${esc(i.cat||'')}</span></span>
+    <span style="color:var(--success);font-size:12px">${fmt(i.sell||0)} · ${i.qty||0} in stock</span>
+  </div>`).join('');
+  dd.style.display='block';
+}
+function selectInvItem(el){
+  document.getElementById('inv-item-search').value=el.dataset.name.replace(/&quot;/g,'"');
+  document.getElementById('inv-item-id').value=el.dataset.id;
+  document.getElementById('inv-price').value=el.dataset.price;
+  document.getElementById('inv-item-dd').style.display='none';
+}
+function addInvItem(){
+  const id=document.getElementById('inv-item-id')?.value;
+  const name=document.getElementById('inv-item-search')?.value.trim();
+  const qty=parseInt(document.getElementById('inv-qty')?.value)||1;
+  const price=parseFloat(document.getElementById('inv-price')?.value)||0;
+  if(!id&&!name){showToast('Select an item first.','error');return;}
+  const item=id?STATE.inventory[id]:Object.values(STATE.inventory).find(i=>i.name===name);
+  if(!item){showToast('Item not found.','error');return;}
+  if(qty>(item.qty||0)){showToast(`Only ${item.qty||0} in stock.`,'error');return;}
+  const ex=invoiceItems.find(l=>l.itemId===item._id&&l.price===price);
+  if(ex){if(ex.qty+qty>(item.qty||0)){showToast('Exceeds stock.','error');return;}ex.qty+=qty;}
+  else invoiceItems.push({itemId:item._id,name:item.name,cost:item.cost||0,qty,price});
+  document.getElementById('inv-item-search').value='';document.getElementById('inv-item-id').value='';
+  document.getElementById('inv-qty').value='1';document.getElementById('inv-price').value='0';
+  renderSales();
+}
+function removeInvItem(idx){invoiceItems.splice(idx,1);renderSales();}
+
+function filterCustDd(val){
+  const dd=document.getElementById('inv-cust-dd');if(!dd)return;
+  const term=val.toLowerCase();
+  const matches=Object.values(STATE.customers||{}).filter(c=>c.name?.toLowerCase().includes(term)||(c.phone||'').includes(term)).slice(0,15);
+  if(!matches.length){dd.style.display='none';return;}
+  dd.innerHTML=matches.map(c=>`<div style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px"
+    onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''" onmousedown="selectCust('${c._id}')">
+    <b>${esc(c.name)}</b><span style="color:var(--text3);font-size:11px;margin-left:8px">${c.phone||''}</span>
+    ${(c.creditBalance||0)>0?`<span style="float:right;color:var(--danger);font-size:11px">Owes ${fmt(c.creditBalance)}</span>`:''}
+  </div>`).join('');
+  dd.style.display='block';
+}
+function selectCust(id){
+  invoiceCustomer=STATE.customers[id];
+  const el=document.getElementById('inv-cust-search');if(el)el.value=invoiceCustomer.name;
+  const dd=document.getElementById('inv-cust-dd');if(dd)dd.style.display='none';
+  renderSales();
+}
+
+function generateInvoiceNum(){
+  const year=new Date().getFullYear();
+  const nums=Object.values(STATE.sales||{}).map(s=>parseInt((s.invoiceNum||'').split('/')[1]||0)).filter(n=>!isNaN(n));
+  const max=nums.length?Math.max(...nums):0;
+  return `${year}/${String(max+1).padStart(4,'0')}`;
+}
+
+async function saveSaleInvoice(mode){
+  if(!invoiceItems.length){showToast('Add items first.','error');return;}
+  if(invoiceType==='registered'&&!invoiceCustomer){showToast('Select a customer.','error');return;}
+  const payType=document.getElementById('inv-pay-type')?.value||'cash';
+  const partAmt=parseFloat(document.getElementById('inv-part-amt')?.value)||0;
+  const dateVal=document.getElementById('inv-date')?.value;
+  const dateObj=dateVal?(()=>{const dp=dateVal.split('-');return new Date(+dp[0],+dp[1]-1,+dp[2]);})():new Date();
+  const date=dateObj.toLocaleDateString();
+  const month=dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0');
+  const printName=invoiceType==='walkin'?(document.getElementById('inv-print-name')?.value.trim()||'Walk-in customer'):invoiceCustomer.name;
+  const invNum=generateInvoiceNum();const invoiceId=uid();
+  setSyncStatus('saving');
+  try{
+    for(const l of invoiceItems){
+      const saleId=uid();
+      const sale={id:saleId,invoiceId,invoiceNum:invNum,name:l.name,itemId:l.itemId,qty:l.qty,
+        salePrice:l.price,cost:l.cost,total:l.price*l.qty,profit:(l.price-l.cost)*l.qty,
+        payment:payType,payMode:payType,partPayment:payType==='part'?partAmt:0,
+        custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
+        printName,date,month,seller:STATE.user.name,supplyStatus:'supplied',pendingSupply:false};
+      await fsSave(COLS.SALES,saleId,sale);STATE.sales[saleId]={...sale,_id:saleId};
+      const inv=STATE.inventory[l.itemId];
+      if(inv){const u={...inv,qty:Math.max(0,(inv.qty||0)-l.qty)};await fsSave(COLS.INVENTORY,l.itemId,u);STATE.inventory[l.itemId]={...u,_id:l.itemId};}
+    }
+    if(invoiceCustomer&&(payType==='credit'||payType==='part')){
+      const gt=invoiceItems.reduce((a,l)=>a+l.price*l.qty,0);
+      const owed=payType==='credit'?gt:Math.max(0,gt-partAmt);
+      const uc={...invoiceCustomer,creditBalance:(invoiceCustomer.creditBalance||0)+owed};
+      await fsSave(COLS.CUSTOMERS,invoiceCustomer._id,uc);STATE.customers[invoiceCustomer._id]={...uc,_id:invoiceCustomer._id};
+    }
+    setSyncStatus('synced');showToast(`✅ Invoice #${invNum} saved!`,'success');
+    if(mode==='print')printSaleInvoice(invNum);
+    invoiceItems=[];invoiceCustomer=null;renderSales();renderOverviewIfActive();updateInventoryBadge();
+  }catch(e){setSyncStatus('error');showToast('Failed: '+e.message,'error');}
+}
+
+function printSaleInvoice(invNum){
+  const items=Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
+  if(!items.length){showToast('Invoice not found.','error');return;}
+  const s0=items[0];const gt=items.reduce((a,s)=>a+s.total,0);
+  const rows=items.map((s,i)=>`<tr><td>${i+1}</td><td>${s.name}</td><td style="text-align:center">${s.qty}</td><td style="text-align:right">₦${Math.round(s.salePrice).toLocaleString()}</td><td style="text-align:right"><b>₦${Math.round(s.total).toLocaleString()}</b></td></tr>`).join('');
+  const w=window.open('','_blank');
+  w.document.write(`<!DOCTYPE html><html><head><title>Invoice #${invNum}</title><style>body{font-family:Arial,sans-serif;padding:20px;max-width:700px;margin:0 auto}.company{color:#1a56db;font-size:22px;font-weight:900;text-align:center}table{width:100%;border-collapse:collapse}th{background:#f5f5f5;padding:8px;border:1px solid #ddd;font-size:12px}td{padding:8px;border:1px solid #ddd;font-size:13px}.total{font-weight:700;background:#eff6ff}@media print{button{display:none}}</style></head><body>
+  <div class="company">GREAT CHID ELECTRO (NIG.)</div><div style="text-align:center;font-weight:700">GLOBAL DOORS LTD</div><hr>
+  <table style="border:none;margin-bottom:15px"><tr><td style="border:none"><b>Name:</b> ${s0.printName}</td><td style="border:none;text-align:right"><b>Invoice #:</b> ${invNum}<br><b>Date:</b> ${s0.date}</td></tr></table>
+  <table><thead><tr><th>#</th><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>${rows}</tbody>
+  <tfoot><tr class="total"><td colspan="4" style="text-align:right">GRAND TOTAL</td><td style="text-align:right">₦${Math.round(gt).toLocaleString()}</td></tr></tfoot></table>
+  ${s0.payment==='part'?`<p><b>Paid:</b> ₦${Math.round(s0.partPayment||0).toLocaleString()} &nbsp; <b style="color:#1a56db">Balance:</b> ₦${Math.round(gt-(s0.partPayment||0)).toLocaleString()}</p>`:''}
+  ${s0.payment==='credit'?`<p style="color:#1a56db"><b>CREDIT SALE — Balance Due: ₦${Math.round(gt).toLocaleString()}</b></p>`:''}
+  <p><b>Served by:</b> ${s0.seller}</p>
+  <p style="text-align:center;font-size:11px;color:#666">Thank you for patronizing Great Chid Electro (Nig.)</p>
+  <button onclick="window.print()">🖨️ Print</button></body></html>`);
+  w.document.close();
+}
+function reprintSaleInvoice(invNum){printSaleInvoice(invNum);}
+
+async function voidInvoice(invNum){
+  if(!confirm(`Void Invoice #${invNum}?`))return;
+  const items=Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
+  setSyncStatus('saving');
+  try{
+    for(const s of items){
+      await fsDelete(COLS.SALES,s._id);delete STATE.sales[s._id];
+      const inv=STATE.inventory[s.itemId];
+      if(inv){const u={...inv,qty:(inv.qty||0)+s.qty};await fsSave(COLS.INVENTORY,s.itemId,u);STATE.inventory[s.itemId]={...u,_id:s.itemId};}
+    }
+    setSyncStatus('synced');showToast(`Invoice #${invNum} voided.`,'info');
+    renderSales();renderOverviewIfActive();
+  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+function showNewInvoiceModal(){renderSales();}
+
+// ════════════════════════════════════════════════════════════
+// WEEK 2 — CUSTOMERS MODULE
+// ════════════════════════════════════════════════════════════
+
+function renderCustomers(){
+  const el=document.getElementById('customers-content');if(!el)return;
+  const custs=Object.values(STATE.customers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const searchTerm=(document.getElementById('cust-search')?.value||'').toLowerCase();
+  const filtered=custs.filter(c=>!searchTerm||c.name?.toLowerCase().includes(searchTerm)||(c.phone||'').includes(searchTerm));
+  const totalOwed=custs.reduce((a,c)=>a+(c.creditBalance||0),0);
+  const creditCusts=custs.filter(c=>(c.creditBalance||0)>0).length;
+  el.innerHTML=`
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1rem">
+      ${kpiCard('info','👥','Total Customers',custs.length,'')}
+      ${kpiCard('danger','💳','On Credit',creditCusts+' customers','Outstanding',creditCusts>0)}
+      ${kpiCard('warning','💰','Total Owed',fmt(totalOwed),'All customers',totalOwed>0)}
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:1rem">
+      <div class="search-wrap" style="flex:1"><span class="search-icon">🔍</span>
+        <input class="form-input" id="cust-search" placeholder="Search customers..." oninput="renderCustomers()" value="${searchTerm}">
+      </div>
+      <button class="btn btn-primary" onclick="showAddCustModal()">+ Add Customer</button>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Name</th><th>Phone</th><th>Address</th><th>Type</th><th class="td-right">Credit Balance</th><th class="td-right">Limit</th><th></th></tr></thead>
+      <tbody>${filtered.map(c=>`<tr>
+        <td><b>${esc(c.name)}</b></td><td style="font-size:12px;color:var(--text3)">${esc(c.phone||'—')}</td>
+        <td style="font-size:12px;color:var(--text3)">${esc(c.address||'—')}</td>
+        <td><span class="badge badge-neutral">${esc(c.type||'Retail')}</span></td>
+        <td class="td-right">${(c.creditBalance||0)>0?`<b style="color:var(--danger)">${fmt(c.creditBalance)}</b>`:'<span style="color:var(--text4)">—</span>'}</td>
+        <td class="td-right">${(c.creditLimit||0)>0?fmt(c.creditLimit):'<span style="color:var(--text4)">—</span>'}</td>
+        <td><div style="display:flex;gap:4px">
+          <button class="btn btn-sm" onclick="showCustProfile('${c._id}')">👤 View</button>
+          <button class="btn btn-sm" onclick="showRecordPaymentModal('${c._id}')">💳 Pay</button>
+        </div></td>
+      </tr>`).join('')||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">👥</div><div>No customers yet</div></div></td></tr>'}
+      </tbody>
+    </table></div>`;
+}
+
+function showAddCustModal(){showModal('👥 Add Customer',`<div class="form-grid c2">
+    <div class="form-group" style="grid-column:1/-1"><label>Full Name <span class="req">*</span></label><input class="form-input" id="ac-name" placeholder="e.g. Mr David Adeyemi"></div>
+    <div class="form-group"><label>Phone</label><input class="form-input" id="ac-phone" placeholder="08012345678"></div>
+    <div class="form-group"><label>Type</label><select class="form-input" id="ac-type"><option value="Retail">Retail</option><option value="Wholesale">Wholesale</option><option value="Contractor">Contractor</option></select></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Address</label><input class="form-input" id="ac-addr"></div>
+    <div class="form-group"><label>Credit Limit (₦)</label><input class="form-input" id="ac-limit" type="number" min="0" value="0"></div>
+    <div class="form-group"><label>Opening Balance (₦)</label><input class="form-input" id="ac-opening" type="number" min="0" value="0"></div>
+  </div>`,[{label:'Cancel',action:'close',style:''},{label:'+ Add',action:'saveAddCustomer()',style:'btn-primary'}]);}
+
+async function saveAddCustomer(){
+  const name=document.getElementById('ac-name').value.trim();
+  if(!name){showToast('Name required.','error');return;}
+  const id=uid();
+  const cust={id,name,phone:document.getElementById('ac-phone').value.trim(),type:document.getElementById('ac-type').value,
+    address:document.getElementById('ac-addr').value.trim(),creditLimit:parseFloat(document.getElementById('ac-limit').value)||0,
+    creditBalance:parseFloat(document.getElementById('ac-opening').value)||0,createdAt:new Date().toISOString()};
+  setSyncStatus('saving');
+  try{await fsSave(COLS.CUSTOMERS,id,cust);STATE.customers[id]={...cust,_id:id};closeModal();renderCustomers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');}
+  catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+function showAddCustomerModal(){showAddCustModal();}
+
+function showCustProfile(id){
+  const c=STATE.customers[id];if(!c)return;
+  const custSales=Object.values(STATE.sales||{}).filter(s=>s.custId===id);
+  const invGroups={};
+  custSales.forEach(s=>{const k=s.invoiceNum;if(!invGroups[k])invGroups[k]={invNum:k,date:s.date,total:0,payment:s.payment};invGroups[k].total+=s.total||0;});
+  const totalSpent=custSales.reduce((a,s)=>a+s.total,0);
+  const invoices=Object.values(invGroups).sort((a,b)=>b.invNum.localeCompare(a.invNum));
+  showModal(`👤 ${esc(c.name)}`,`
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:1rem">
+      ${kpiCard('info','🧾','Invoices',invoices.length,'')}${kpiCard('success','💰','Total Spent',fmt(totalSpent),'Lifetime')}
+      ${kpiCard('danger','💳','Credit Owed',fmt(c.creditBalance||0),(c.creditBalance||0)>0?'Outstanding':'Clear',(c.creditBalance||0)>0)}
+      ${kpiCard('warning','🔒','Credit Limit',c.creditLimit?fmt(c.creditLimit):'No limit','')}
+    </div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:1rem">📞 ${c.phone||'—'} &nbsp;|&nbsp; 📍 ${c.address||'—'} &nbsp;|&nbsp; 🏷️ ${c.type||'Retail'}</div>
+    ${invoices.length?`<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Invoice #</th><th class="td-right">Total</th><th>Pay</th></tr></thead>
+    <tbody>${invoices.map(g=>`<tr><td>${g.date}</td><td><b>${g.invNum}</b></td><td class="td-right">${fmt(g.total)}</td>
+    <td>${g.payment==='credit'?'<span class="badge badge-danger">Credit</span>':g.payment==='part'?'<span class="badge badge-warning">Part</span>':'<span class="badge badge-success">Paid</span>'}</td></tr>`).join('')}
+    </tbody></table></div>`:'<div class="empty-state"><div>No purchase history yet</div></div>'}
+  `,[{label:'Close',action:'close',style:''},{label:'💳 Record Payment',action:`showRecordPaymentModal('${id}')`,style:'btn-primary'}]);
+}
+
+function showRecordPaymentModal(id){
+  const c=STATE.customers[id];if(!c)return;
+  if(!(c.creditBalance>0)){showToast(`${c.name} has no outstanding balance.`,'info');return;}
+  showModal(`💳 Payment — ${esc(c.name)}`,`
+    <div class="alert alert-warning">Outstanding: <b>${fmt(c.creditBalance)}</b></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Amount (₦) <span class="req">*</span></label><input class="form-input" id="rp-amt" type="number" min="0" placeholder="${c.creditBalance}"></div>
+      <div class="form-group"><label>Mode</label><select class="form-input" id="rp-mode"><option value="cash">Cash</option><option value="transfer">Transfer</option><option value="pos">POS</option></select></div>
+      <div class="form-group"><label>Date</label><input class="form-input" id="rp-date" type="date"></div>
+      <div class="form-group"><label>Note</label><input class="form-input" id="rp-note" placeholder="Optional"></div>
+    </div>
+  `,[{label:'Cancel',action:'close',style:''},{label:'✓ Record',action:`saveRecordPayment('${id}')`,style:'btn-success'}]);
+}
+async function saveRecordPayment(id){
+  const c=STATE.customers[id];
+  const amt=parseFloat(document.getElementById('rp-amt').value)||0;
+  if(amt<=0){showToast('Enter valid amount.','error');return;}
+  const mode=document.getElementById('rp-mode').value;
+  const dateVal=document.getElementById('rp-date').value;
+  const note=document.getElementById('rp-note').value.trim();
+  const dateObj=dateVal?(()=>{const dp=dateVal.split('-');return new Date(+dp[0],+dp[1]-1,+dp[2]);})():new Date();
+  const date=dateObj.toLocaleDateString();
+  const newBal=Math.max(0,(c.creditBalance||0)-amt);
+  const updated={...c,creditBalance:newBal};
+  setSyncStatus('saving');
+  try{
+    await fsSave(COLS.CUSTOMERS,id,updated);STATE.customers[id]={...updated,_id:id};
+    const payId=uid();
+    await fsSave(COLS.CASHFLOW,payId,{id:payId,desc:`Credit payment — ${c.name}${note?' — '+note:''}`,amount:amt,type:'in',cat:'Credit Payment',payMode:mode,custId:id,date,month:dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0'),by:STATE.user.name});
+    closeModal();renderCustomers();setSyncStatus('synced');
+    showToast(`✅ Payment recorded. New balance: ${fmt(newBal)}`,'success');
+  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+// ════════════════════════════════════════════════════════════
+// WEEK 2 — SUPPLIERS MODULE
+// ════════════════════════════════════════════════════════════
+
+function renderSuppliers(){
+  const el=document.getElementById('suppliers-content');if(!el)return;
+  const sups=Object.values(STATE.suppliers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const totalOwed=sups.reduce((a,s)=>a+(s.owedToSupplier||0),0);
+  el.innerHTML=`
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1rem">
+      ${kpiCard('info','🚛','Total Suppliers',sups.length,'')}
+      ${kpiCard('danger','💸','Total Owed',fmt(totalOwed),'To suppliers',totalOwed>0)}
+      ${kpiCard('success','📦','Active',sups.filter(s=>s.totalPurchased>0).length,'With purchases')}
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem">
+      <button class="btn btn-primary" onclick="showAddSupplierModal()">+ Add Supplier</button>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Supplier</th><th>Phone</th><th>Address</th><th class="td-right">Purchased</th><th class="td-right">Owed</th><th></th></tr></thead>
+      <tbody>${sups.map(s=>`<tr>
+        <td><b>${esc(s.name)}</b></td><td style="font-size:12px;color:var(--text3)">${esc(s.phone||'—')}</td>
+        <td style="font-size:12px;color:var(--text3)">${esc(s.address||'—')}</td>
+        <td class="td-right">${fmt(s.totalPurchased||0)}</td>
+        <td class="td-right">${(s.owedToSupplier||0)>0?`<b style="color:var(--danger)">${fmt(s.owedToSupplier)}</b>`:'<span style="color:var(--text4)">—</span>'}</td>
+        <td><button class="btn btn-sm" onclick="showEditSupplierModal('${s._id}')">✏️ Edit</button></td>
+      </tr>`).join('')||'<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers yet</div></div></td></tr>'}
+      </tbody>
+    </table></div>`;
+}
+
+function showAddSupplierModal(){
+  showModal('🚛 Add Supplier',`<div class="form-grid c2">
+    <div class="form-group" style="grid-column:1/-1"><label>Name <span class="req">*</span></label><input class="form-input" id="as-name" placeholder="e.g. EAGLE RACE MULTI LINKS"></div>
+    <div class="form-group"><label>Phone</label><input class="form-input" id="as-phone" placeholder="08012345678"></div>
+    <div class="form-group"><label>Contact Person</label><input class="form-input" id="as-contact" placeholder="Contact name"></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Address</label><input class="form-input" id="as-addr"></div>
+    <div class="form-group"><label>Opening Balance Owed (₦)</label><input class="form-input" id="as-opening" type="number" min="0" value="0"></div>
+  </div>`,[{label:'Cancel',action:'close',style:''},{label:'+ Add',action:'saveAddSupplier()',style:'btn-primary'}]);
+}
+async function saveAddSupplier(){
+  const name=document.getElementById('as-name').value.trim();
+  if(!name){showToast('Name required.','error');return;}
+  if(Object.values(STATE.suppliers||{}).find(s=>s.name.toLowerCase()===name.toLowerCase())){showToast('Already exists.','error');return;}
+  const id=uid();const opening=parseFloat(document.getElementById('as-opening').value)||0;
+  const sup={id,name,phone:document.getElementById('as-phone').value.trim(),contact:document.getElementById('as-contact').value.trim(),
+    address:document.getElementById('as-addr').value.trim(),openingBalance:opening,owedToSupplier:opening,totalPurchased:0,createdAt:new Date().toISOString()};
+  setSyncStatus('saving');
+  try{await fsSave(COLS.SUPPLIERS,id,sup);STATE.suppliers[id]={...sup,_id:id};closeModal();renderSuppliers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');}
+  catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+function showEditSupplierModal(id){
+  const s=STATE.suppliers[id];if(!s)return;
+  showModal(`✏️ Edit — ${esc(s.name)}`,`<div class="form-grid c2">
+    <div class="form-group" style="grid-column:1/-1"><label>Name</label><input class="form-input" id="es-name" value="${esc(s.name||'')}"></div>
+    <div class="form-group"><label>Phone</label><input class="form-input" id="es-phone" value="${esc(s.phone||'')}"></div>
+    <div class="form-group"><label>Contact</label><input class="form-input" id="es-contact" value="${esc(s.contact||'')}"></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Address</label><input class="form-input" id="es-addr" value="${esc(s.address||'')}"></div>
+  </div>`,[{label:'Cancel',action:'close',style:''},{label:'✓ Save',action:`saveEditSupplier('${id}')`,style:'btn-primary'}]);
+}
+async function saveEditSupplier(id){
+  const s=STATE.suppliers[id];
+  const updated={...s,name:document.getElementById('es-name').value.trim(),phone:document.getElementById('es-phone').value.trim(),
+    contact:document.getElementById('es-contact').value.trim(),address:document.getElementById('es-addr').value.trim()};
+  setSyncStatus('saving');
+  try{await fsSave(COLS.SUPPLIERS,id,updated);STATE.suppliers[id]={...updated,_id:id};closeModal();renderSuppliers();setSyncStatus('synced');showToast('✅ Updated.','success');}
+  catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
 
 // ════════════════════════════════════════════════════════════
 // USERS PAGE (Admin only)
