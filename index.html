@@ -506,20 +506,24 @@ select.form-input{cursor:pointer}
 const FB = {
   projectId: 'new-great-chid-dashboard',
   apiKey:    'AIzaSyDtSPRgy3EVf9SdPGUj1fd2xxfOpYjzRvU',
-  base:      'https://firestore.googleapis.com/v1/projects/new-great-chid-dashboard/databases/(default)/documents/v2'
+  base:      'https://firestore.googleapis.com/v1/projects/new-great-chid-dashboard/databases/(default)/documents'
 };
+
+// Collection name helper — prefixes all v2 collections with 'v2_'
+// so they don't conflict with v1 gce_business collections
+function col(name) { return 'v2_' + name; }
 
 // ── Collections ────────────────────────────────────────────
 // Each item = its own Firestore document under v2/{collection}/{id}
 const COLS = {
-  USERS:     'users',
-  INVENTORY: 'inventory',
-  SALES:     'sales',
-  PURCHASES: 'purchases',
-  CUSTOMERS: 'customers',
-  SUPPLIERS: 'suppliers',
-  CASHFLOW:  'cashflow',
-  SETTINGS:  'settings'
+  USERS:     'v2_users',
+  INVENTORY: 'v2_inventory',
+  SALES:     'v2_sales',
+  PURCHASES: 'v2_purchases',
+  CUSTOMERS: 'v2_customers',
+  SUPPLIERS: 'v2_suppliers',
+  CASHFLOW:  'v2_cashflow',
+  SETTINGS:  'v2_settings'
 };
 
 // ── App State ──────────────────────────────────────────────
@@ -1765,7 +1769,7 @@ async function savePurchase() {
   setSyncStatus('saving');
   try {
     // Save purchase document
-    await fsSave('purchases', id, purchase);
+    await fsSave('v2_purchases', id, purchase);
     if (!STATE.purchases) STATE.purchases = {};
     STATE.purchases[id] = {...purchase, _id:id};
     // Update inventory stock for each item
@@ -1902,7 +1906,7 @@ async function saveExpense() {
   const exp = {id, desc, amount:amt, type:'out', cat, payMode:mode, date, month, by:STATE.user.name};
   setSyncStatus('saving');
   try {
-    await fsSave('cashflow', id, exp);
+    await fsSave('v2_cashflow', id, exp);
     if (!STATE.cashflow) STATE.cashflow = {};
     STATE.cashflow[id] = {...exp, _id:id};
     closeModal();
@@ -2037,13 +2041,13 @@ function renderReports() {
 // ── Load purchases and cashflow in listeners ──────────────
 function startExtraListeners() {
   // Purchases
-  startLivePolling('purchases', (docs) => {
+  startLivePolling('v2_purchases', (docs) => {
     STATE.purchases = {};
     docs.forEach(d => { STATE.purchases[d._id] = d; });
     if (document.getElementById('page-purchases')?.classList.contains('active')) renderPurchases();
   });
   // Cashflow/Expenses
-  startLivePolling('cashflow', (docs) => {
+  startLivePolling('v2_cashflow', (docs) => {
     STATE.cashflow = {};
     docs.forEach(d => { STATE.cashflow[d._id] = d; });
     if (document.getElementById('page-expenses')?.classList.contains('active')) renderExpenses();
@@ -2051,7 +2055,7 @@ function startExtraListeners() {
     if (document.getElementById('page-closing')?.classList.contains('active')) renderClosing();
   });
   // Warehouse
-  startLivePolling('warehouse', (docs) => {
+  startLivePolling('v2_warehouse', (docs) => {
     STATE.warehouse = {};
     docs.forEach(d => { STATE.warehouse[d._id] = d; });
     if (document.getElementById('page-warehouse')?.classList.contains('active')) renderWarehouse();
@@ -2160,7 +2164,7 @@ async function saveAddWhItem() {
   try {
     // Add to warehouse
     const whItem = {id, name, cat, qty, minQty, cost, createdAt:new Date().toISOString()};
-    await fsSave('warehouse', id, whItem);
+    await fsSave('v2_warehouse', id, whItem);
     if (!STATE.warehouse) STATE.warehouse = {};
     STATE.warehouse[id] = {...whItem, _id:id};
     // Add to shop inventory with qty 0
@@ -2219,7 +2223,7 @@ async function saveTransferToShop(whId) {
   try {
     // Deduct from warehouse
     const updWh = {...wh, qty:(wh.qty||0)-qty};
-    await fsSave('warehouse', whId, updWh);
+    await fsSave('v2_warehouse', whId, updWh);
     STATE.warehouse[whId] = {...updWh, _id:whId};
     // Add to shop inventory
     if (shopItem) {
@@ -2282,7 +2286,7 @@ async function applyWhStockAdj(whId) {
   const updated = {...wh, qty:after};
   setSyncStatus('saving');
   try {
-    await fsSave('warehouse', whId, updated);
+    await fsSave('v2_warehouse', whId, updated);
     STATE.warehouse[whId] = {...updated, _id:whId};
     closeModal();
     renderWarehouse();
@@ -2326,12 +2330,12 @@ async function saveShopToWh() {
     const whItem = Object.values(STATE.warehouse||{}).find(w=>w._id===itemId||w.name?.toLowerCase()===invItem.name?.toLowerCase());
     if (whItem) {
       const updWh = {...whItem, qty:(whItem.qty||0)+qty};
-      await fsSave('warehouse', whItem._id, updWh);
+      await fsSave('v2_warehouse', whItem._id, updWh);
       STATE.warehouse[whItem._id] = {...updWh, _id:whItem._id};
     } else {
       const whId = uid();
       const newWh = {id:whId, name:invItem.name, cat:invItem.cat||'', qty, minQty:invItem.minQty||5, cost:invItem.cost||0};
-      await fsSave('warehouse', whId, newWh);
+      await fsSave('v2_warehouse', whId, newWh);
       if (!STATE.warehouse) STATE.warehouse = {};
       STATE.warehouse[whId] = {...newWh, _id:whId};
     }
@@ -2612,7 +2616,7 @@ async function migrateFromLiveFirestore() {
         if (!w) continue;
         try {
           const id = String(w.id||uid());
-          await fsSave('warehouse', id, {...w, id, _v1migrated:true});
+          await fsSave('v2_warehouse', id, {...w, id, _v1migrated:true});
           if (!STATE.warehouse) STATE.warehouse = {};
           STATE.warehouse[id] = {...w, id, _id:id};
           counts.warehouse++;
@@ -2716,7 +2720,7 @@ async function importV1Backup() {
         if (!w) continue;
         try {
           const id = String(w.id || uid());
-          await fsSave('warehouse', id, {...w, id, _v1migrated:true});
+          await fsSave('v2_warehouse', id, {...w, id, _v1migrated:true});
           if (!STATE.warehouse) STATE.warehouse = {};
           STATE.warehouse[id] = {...w, id, _id:id};
         } catch(e) { errCount++; }
@@ -2744,7 +2748,7 @@ async function importV1Backup() {
 async function clearAllV2Data() {
   setSyncStatus('saving');
   try {
-    for (const col of ['inventory','sales','customers','suppliers','purchases','cashflow','warehouse','users']) {
+    for (const col of ['v2_inventory','v2_sales','v2_customers','v2_suppliers','v2_purchases','v2_cashflow','v2_warehouse','v2_users']) {
       const docs = await fsList(col);
       for (const doc of docs) { await fsDelete(col, doc._id); }
     }
