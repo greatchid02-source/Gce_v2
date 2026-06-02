@@ -394,10 +394,11 @@ select.form-input{cursor:pointer}
             </tr>
           </thead>
           <tbody id="inv-tbody">
-            <tr><td colspan="10"><div class="empty-state"><div class="empty-state-icon">📦</div><div class="empty-state-title">Loading inventory...</div></div></td></tr>
+            <tr><td colspan="10"><div class="empty-state"><div class="empty-state-icon">📦</div><div>Loading inventory...</div></div></td></tr>
           </tbody>
         </table>
       </div>
+      <div id="inv-pager"></div>
     </div>
 
     <!-- ── SALES ── -->
@@ -1064,70 +1065,132 @@ function updateInventoryBadge() {
 // OVERVIEW PAGE
 // ════════════════════════════════════════════════════════════
 
-function renderOverviewIfActive() {
-  if (document.getElementById('page-overview').classList.contains('active')) renderOverview();
-}
-
 function renderOverview() {
-  const items = Object.values(STATE.inventory);
-  const sales = Object.values(STATE.sales);
-  const today = new Date().toLocaleDateString();
-  const shopVal = items.reduce((a,i) => a + (i.qty||0)*(i.cost||0), 0);
-  const lowCount = items.filter(i => i.qty > 0 && i.qty <= (i.minQty||5)).length;
-  const outCount = items.filter(i => i.qty === 0).length;
-  const todaySales = sales.filter(s => s.date === today);
-  const todayRev = todaySales.reduce((a,s) => a + (s.total||0), 0);
-  const todayProfit = todaySales.reduce((a,s) => a + (s.profit||0), 0);
-  const margin = todayRev > 0 ? Math.round(todayProfit/todayRev*100) : 0;
-  const dateStr = new Date().toLocaleDateString('default', {weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  const el = document.getElementById('overview-content');
+  if (!el) return;
+  const now = new Date();
+  const today = now.toLocaleDateString();
+  const curMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const monthName = now.toLocaleString('default',{month:'long',year:'numeric'});
 
-  document.getElementById('overview-content').innerHTML = `
-    <div class="overview-hero">
-      <div style="position:relative;z-index:1">
-        <div class="overview-hero-title">Great Chid Electro / Global Doors Ltd</div>
-        <div style="font-size:11px;opacity:.6;margin-bottom:1rem">${dateStr}</div>
-        <div class="overview-hero-grid">
-          <div class="hero-stat" style="border:none;padding:0">
-            <div class="hero-stat-label">Stock Value</div>
-            <div class="hero-stat-val">${fmt(shopVal)}</div>
-            <div style="font-size:11px;opacity:.6">${items.length} items</div>
-          </div>
-          <div class="hero-stat">
-            <div class="hero-stat-label">Today's Revenue</div>
-            <div class="hero-stat-val">${fmt(todayRev)}</div>
-            <div style="font-size:11px;opacity:.6">${todaySales.length} invoices</div>
-          </div>
-          <div class="hero-stat">
-            <div class="hero-stat-label">Today's Profit</div>
-            <div class="hero-stat-val">${fmt(todayProfit)}</div>
-            <div style="font-size:11px;opacity:.6">${margin}% margin</div>
-          </div>
-        </div>
+  // ── Stock ──────────────────────────────────────────────────
+  const items = Object.values(STATE.inventory||{});
+  const whItems = Object.values(STATE.warehouse||{});
+  const shopVal = items.reduce((a,i)=>a+(i.qty||0)*(i.cost||0),0);
+  const whVal = whItems.reduce((a,w)=>a+(w.qty||0)*(w.cost||0),0);
+  const combinedVal = shopVal + whVal;
+  const shopLow = items.filter(i=>(i.qty||0)>0&&(i.qty||0)<=(i.minQty||5)).length;
+  const shopOut = items.filter(i=>(i.qty||0)===0).length;
+  const whLow = whItems.filter(w=>(w.qty||0)>0&&(w.qty||0)<=(w.minQty||5)).length;
+  const whOut = whItems.filter(w=>(w.qty||0)===0).length;
+  const whReady = whItems.filter(w=>{
+    if((w.qty||0)<=0)return false;
+    const s=Object.values(STATE.inventory||{}).find(i=>i._id===w._id||i.name?.toLowerCase()===w.name?.toLowerCase());
+    return !s||(s.qty||0)===0;
+  }).length;
+
+  // ── Sales ──────────────────────────────────────────────────
+  const allSales = Object.values(STATE.sales||{});
+  const todaySales = allSales.filter(s=>s.date===today);
+  const monthSales = allSales.filter(s=>(s.month||'')===curMonth);
+  const todayRev = todaySales.reduce((a,s)=>a+(s.total||0),0);
+  const todayProfit = todaySales.reduce((a,s)=>a+(s.profit||0),0);
+  const monthRev = monthSales.reduce((a,s)=>a+(s.total||0),0);
+  const monthProfit = monthSales.reduce((a,s)=>a+(s.profit||0),0);
+  const todayInvCount = [...new Set(todaySales.map(s=>s.invoiceNum))].length;
+
+  // ── Financial ──────────────────────────────────────────────
+  const allCusts = Object.values(STATE.customers||{});
+  const totalOutstanding = allCusts.reduce((a,c)=>a+(c.creditBalance||0),0);
+  const creditCusts = allCusts.filter(c=>(c.creditBalance||0)>0).length;
+  const allSups = Object.values(STATE.suppliers||{});
+  const suppOwed = allSups.reduce((a,s)=>a+(s.owedToSupplier||0),0);
+  const cashflow = Object.values(STATE.cashflow||{});
+  const monthExp = cashflow.filter(c=>c.type==='out'&&!['Restock','Supplier Payment','Supplier Deposit','Change'].includes(c.cat)&&(c.month||'')===curMonth)
+    .reduce((a,c)=>a+(c.amount||0),0);
+
+  function pct(a,b){return b>0?'('+Math.round(a/b*100)+'%)':'';}
+
+  function kpi(icon,label,val,sub,color,page,pulse){
+    const accent = color||'var(--brand)';
+    const pulseHtml = pulse?`<span style="position:absolute;top:10px;right:10px;width:8px;height:8px;border-radius:50%;background:${accent};animation:live-pulse 1.5s infinite"></span>`:'';
+    const click = page?`onclick="switchPage('${page}')" style="cursor:pointer"`:`style="cursor:default"`;
+    return `<div class="kpi-card" ${click} style="border-top:3px solid ${accent};position:relative">
+      ${pulseHtml}
+      <div class="kpi-label">${icon} ${label}</div>
+      <div class="kpi-value" style="color:${accent};font-size:20px">${val}</div>
+      <div class="kpi-sub">${sub}</div>
+    </div>`;
+  }
+
+  function section(title,color){
+    return `<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:${color};margin:1.5rem 0 .75rem;padding-left:10px;border-left:3px solid ${color}">${title}</div>`;
+  }
+
+  el.innerHTML = `
+    <!-- Hero Banner -->
+    <div style="background:linear-gradient(135deg,#1a56db 0%,#1341b0 60%,#0e2e8a 100%);border-radius:var(--radius-xl);padding:1.5rem 1.75rem;margin-bottom:1.5rem;color:#fff;box-shadow:var(--shadow-lg);position:relative;overflow:hidden">
+      <div style="position:absolute;right:-20px;top:-20px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.05)"></div>
+      <div style="position:absolute;right:40px;bottom:-30px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,.04)"></div>
+      <div style="font-size:22px;font-weight:800;margin-bottom:4px">Great Chid Electro</div>
+      <div style="font-size:13px;opacity:.75">Business Overview &nbsp;·&nbsp; ${now.toLocaleDateString('default',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</div>
+      <div style="display:flex;gap:2rem;margin-top:1.1rem;flex-wrap:wrap">
+        <div><div style="font-size:10px;opacity:.65;text-transform:uppercase;letter-spacing:.08em">Combined Stock Value</div><div style="font-size:26px;font-weight:800">${fmt(combinedVal)}</div></div>
+        <div><div style="font-size:10px;opacity:.65;text-transform:uppercase;letter-spacing:.08em">Today's Revenue</div><div style="font-size:26px;font-weight:800">${fmt(todayRev)}</div></div>
+        <div><div style="font-size:10px;opacity:.65;text-transform:uppercase;letter-spacing:.08em">Outstanding</div><div style="font-size:26px;font-weight:800">${fmt(totalOutstanding)}</div></div>
       </div>
     </div>
 
-    <div class="sec-title">📦 Stock Health</div>
-    <div class="kpi-grid">
-      ${kpiCard('brand', '📦', 'Total Items', items.length + ' items', fmt(shopVal) + ' value')}
-      ${kpiCard('warning', '🟡', 'Low Stock', lowCount + ' items', 'At or below minimum', lowCount > 0)}
-      ${kpiCard('danger', '🔴', 'Out of Stock', outCount + ' items', 'Need restocking', outCount > 0)}
-      ${kpiCard('success', '✅', 'Healthy Items', (items.length - lowCount - outCount) + ' items', 'Sufficient stock')}
+    ${section('📦 Stock Health','#15803d')}
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+      ${kpi('🔵','Combined Stock Value',fmt(combinedVal),'Shop + Warehouse','#1565c0',null,false)}
+      ${kpi('🏬','Shop Stock Value',fmt(shopVal),items.length+' items in shop','#0891b2','inventory',false)}
+      ${kpi('🏭','Warehouse Value',fmt(whVal),whItems.length+' items in warehouse','#7c3aed','warehouse',false)}
+      ${kpi('⚠️','Transfer Ready',whReady+' item'+(whReady!==1?'s':''),'In warehouse, shop qty is 0',whReady>0?'#dc2626':'#15803d','warehouse',whReady>0)}
+    </div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-top:10px">
+      ${kpi('🔴','Shop — Out of Stock',shopOut+' item'+(shopOut!==1?'s':''),'Need restocking',shopOut>0?'#dc2626':'#15803d','inventory',shopOut>0)}
+      ${kpi('🟡','Shop — Low Stock',shopLow+' item'+(shopLow!==1?'s':''),'At or below minimum',shopLow>0?'#d97706':'#15803d','inventory',shopLow>0)}
+      ${kpi('🔴','Warehouse — Out',whOut+' item'+(whOut!==1?'s':''),'Zero qty in warehouse',whOut>0?'#dc2626':'#15803d','warehouse',false)}
+      ${kpi('🟡','Warehouse — Low',whLow+' item'+(whLow!==1?'s':''),'At or below minimum',whLow>0?'#d97706':'#15803d','warehouse',false)}
     </div>
 
-    <div class="sec-title">🧾 Today's Sales</div>
-    <div class="kpi-grid">
-      ${kpiCard('info', '💰', 'Revenue', fmt(todayRev), todaySales.length + ' invoices')}
-      ${kpiCard('success', '📈', 'Profit', fmt(todayProfit), margin + '% margin')}
+    ${section('🧾 Sales Performance','#0d6efd')}
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+      ${kpi('📅',"Today's Revenue",fmt(todayRev),todayInvCount+' invoice'+(todayInvCount!==1?'s':''),'#0d6efd','sales',false)}
+      ${kpi('💰',"Today's Profit",fmt(todayProfit),pct(todayProfit,todayRev)+' margin',todayProfit>0?'#15803d':'#6b7280',null,false)}
+      ${kpi('📆','This Month Revenue',fmt(monthRev),monthName,'#0891b2','sales',false)}
+      ${kpi('📈','This Month Profit',fmt(monthProfit),pct(monthProfit,monthRev)+' margin',monthProfit>0?'#15803d':'#6b7280',null,false)}
     </div>
 
-    <div class="sec-title">🔔 Quick Actions</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:1.5rem">
-      ${quickAction('📦', 'Inventory', 'inventory', 'info')}
-      ${quickAction('🧾', 'New Sale', 'sales', 'success')}
-      ${quickAction('🛒', 'Purchases', 'purchases', 'warning')}
-      ${quickAction('👥', 'Customers', 'customers', 'brand')}
+    ${section('📊 Financial Snapshot','#7c3aed')}
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+      ${kpi('🧾','Total Outstanding',fmt(totalOutstanding),'Unpaid invoices',totalOutstanding>0?'#dc2626':'#15803d','customers',totalOutstanding>0)}
+      ${kpi('💳','Customers on Credit',creditCusts+' customer'+(creditCusts!==1?'s':''),'With outstanding balance',creditCusts>0?'#d97706':'#15803d','customers',false)}
+      ${kpi('💸','Expenses This Month',fmt(monthExp),monthName,monthExp>0?'#dc2626':'#15803d','expenses',false)}
+      ${kpi('🚛','Owed to Suppliers',fmt(suppOwed),'Credit & part-payment',suppOwed>0?'#d97706':'#15803d','suppliers',suppOwed>0)}
+    </div>
+
+    ${section('🔔 Quick Actions','#dc2626')}
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:1.5rem">
+      <button onclick="switchPage('inventory')" style="padding:14px;font-size:13px;font-weight:700;color:#dc2626;border:1px solid #f5c2c7;background:#fff5f5;border-radius:var(--radius-lg);text-align:left;cursor:pointer">
+        <span style="font-size:20px">📦</span> Shop Inventory &nbsp;<span style="float:right;font-size:11px;background:#dc2626;color:#fff;border-radius:20px;padding:2px 8px">${items.length} items</span>
+      </button>
+      <button onclick="switchPage('warehouse')" style="padding:14px;font-size:13px;font-weight:700;color:#7c3aed;border:1px solid #c4b5fd;background:#f5f3ff;border-radius:var(--radius-lg);text-align:left;cursor:pointer">
+        <span style="font-size:20px">🏭</span> Warehouse &nbsp;<span style="float:right;font-size:11px;background:#7c3aed;color:#fff;border-radius:20px;padding:2px 8px">${whItems.length} items</span>
+      </button>
+      <button onclick="switchPage('sales')" style="padding:14px;font-size:13px;font-weight:700;color:#1a56db;border:1px solid #b6d4fe;background:#eff6ff;border-radius:var(--radius-lg);text-align:left;cursor:pointer">
+        <span style="font-size:20px">🧾</span> Sales &nbsp;<span style="float:right;font-size:11px;background:#1a56db;color:#fff;border-radius:20px;padding:2px 8px">${allSales.length} records</span>
+      </button>
+      <button onclick="switchPage('reports')" style="padding:14px;font-size:13px;font-weight:700;color:#15803d;border:1px solid #a3cfbb;background:#f0fdf4;border-radius:var(--radius-lg);text-align:left;cursor:pointer">
+        <span style="font-size:20px">📈</span> Financial Dashboard
+      </button>
     </div>
   `;
+}
+
+function renderOverviewIfActive() {
+  if (document.getElementById('page-overview')?.classList.contains('active')) renderOverview();
 }
 
 function kpiCard(color, icon, label, value, sub, pulse=false) {
@@ -1150,6 +1213,9 @@ function quickAction(icon, label, page, color) {
 // INVENTORY PAGE
 // ════════════════════════════════════════════════════════════
 
+const INV_PAGE_SIZE = 50;
+if (typeof window._invPage === 'undefined') window._invPage = 0;
+
 function renderInventory() {
   const items = Object.values(STATE.inventory);
   const searchTerm = (document.getElementById('inv-search')?.value || '').toLowerCase();
@@ -1165,16 +1231,22 @@ function renderInventory() {
       cats.map(c => `<option value="${c}" ${c===curCat?'selected':''}>${esc(c)}</option>`).join('');
   }
 
-  // Filter
-  let filtered = items.filter(i => {
-    if (searchTerm && !i.name?.toLowerCase().includes(searchTerm) && !(i.cat||'').toLowerCase().includes(searchTerm)) return false;
+  // Filter ALL items first (search works across all pages)
+  const filtered = items.filter(i => {
+    if (searchTerm && !i.name?.toLowerCase().includes(searchTerm) &&
+        !(i.cat||'').toLowerCase().includes(searchTerm) &&
+        !(i.supplierName||'').toLowerCase().includes(searchTerm)) return false;
     if (catFilter && i.cat !== catFilter) return false;
-    if (statusFilter) {
-      const s = itemStatus(i);
-      if (statusFilter !== s) return false;
-    }
+    if (statusFilter) { if (statusFilter !== itemStatus(i)) return false; }
     return true;
   }).sort((a,b) => (a.name||'').localeCompare(b.name||''));
+
+  // Reset to page 0 when filters change
+  const totalPages = Math.ceil(filtered.length / INV_PAGE_SIZE);
+  if (window._invPage >= totalPages) window._invPage = 0;
+  const page = window._invPage || 0;
+  const start = page * INV_PAGE_SIZE;
+  const pageItems = filtered.slice(start, start + INV_PAGE_SIZE);
 
   // KPIs
   const totalVal = items.reduce((a,i) => a+(i.qty||0)*(i.cost||0), 0);
@@ -1186,11 +1258,15 @@ function renderInventory() {
     kpiCard('warning','🟡','Low Stock',lowCount,'Need restock',lowCount>0) +
     kpiCard('danger','🔴','Out of Stock',outCount,'Need restock',outCount>0);
 
-  document.getElementById('inv-subtitle').textContent = `${filtered.length} of ${items.length} items`;
+  // Subtitle with search result count
+  document.getElementById('inv-subtitle').textContent =
+    searchTerm || catFilter || statusFilter
+      ? `${filtered.length} results of ${items.length} items`
+      : `${items.length} items`;
 
-  // Table rows
+  // Table rows (current page only)
   const canEdit = hasPerm('inventory_edit') || hasPerm('all');
-  const rows = filtered.map(i => {
+  const rows = pageItems.map(i => {
     const status = itemStatus(i);
     const chipClass = {ok:'chip-ok',low:'chip-low',out:'chip-out'}[status];
     const chipLabel = {ok:'OK',low:'Low',out:'Out'}[status];
@@ -1216,13 +1292,43 @@ function renderInventory() {
   document.getElementById('inv-tbody').innerHTML = rows ||
     `<tr><td colspan="10"><div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-title">No items found</div></div></td></tr>`;
 
-  // Wire up search/filter live
+  // Pagination bar
+  const pagerEl = document.getElementById('inv-pager');
+  if (pagerEl) {
+    if (totalPages <= 1) {
+      pagerEl.innerHTML = '';
+    } else {
+      const from = start + 1;
+      const to = Math.min(start + INV_PAGE_SIZE, filtered.length);
+      // Page buttons — show max 7 around current
+      let pageBtns = '';
+      for (let p = 0; p < totalPages; p++) {
+        if (totalPages > 7 && Math.abs(p - page) > 2 && p !== 0 && p !== totalPages-1) {
+          if (p === 1 && page > 3) pageBtns += `<span style="padding:4px 6px;color:var(--text3)">…</span>`;
+          else if (p === totalPages-2 && page < totalPages-4) pageBtns += `<span style="padding:4px 6px;color:var(--text3)">…</span>`;
+          continue;
+        }
+        pageBtns += `<button class="btn btn-sm ${p===page?'btn-primary':''}"
+          onclick="window._invPage=${p};renderInventory()"
+          style="min-width:32px;padding:5px 8px">${p+1}</button>`;
+      }
+      pagerEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:12px">
+          <span style="font-size:12px;color:var(--text3);margin-right:4px">Showing ${from}–${to} of ${filtered.length}</span>
+          <button class="btn btn-sm" onclick="window._invPage=Math.max(0,${page}-1);renderInventory()" ${page===0?'disabled':''}>‹ Prev</button>
+          ${pageBtns}
+          <button class="btn btn-sm" onclick="window._invPage=Math.min(${totalPages-1},${page}+1);renderInventory()" ${page>=totalPages-1?'disabled':''}>Next ›</button>
+        </div>`;
+    }
+  }
+
+  // Wire up search/filter — reset page on change
   const search = document.getElementById('inv-search');
   if (search && !search._wired) {
     search._wired = true;
-    search.oninput = () => renderInventory();
-    document.getElementById('inv-cat-filter').onchange = () => renderInventory();
-    document.getElementById('inv-status-filter').onchange = () => renderInventory();
+    search.oninput = () => { window._invPage = 0; renderInventory(); };
+    document.getElementById('inv-cat-filter').onchange = () => { window._invPage = 0; renderInventory(); };
+    document.getElementById('inv-status-filter').onchange = () => { window._invPage = 0; renderInventory(); };
   }
 }
 
